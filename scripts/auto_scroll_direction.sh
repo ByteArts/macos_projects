@@ -26,24 +26,20 @@ has_external_mouse() {
     local bt_mice
     bt_mice=$(system_profiler SPBluetoothDataType 2>/dev/null | grep -E "(Mouse|Trackball)" | grep -v "Not Connected" | wc -l)
 
-    # Check for HID devices with mouse-like properties (checking for pointing devices)
+    # Check for HID devices with mouse-like properties but only external ones
     local hid_mice
-    hid_mice=$(ioreg -c IOHIDDevice 2>/dev/null | grep -E "(Pointing|Mouse|Receiver)" | wc -l)
+    hid_mice=$(ioreg -c IOHIDDevice 2>/dev/null | grep -A 10 -B 5 -E "(Pointing|Mouse|Receiver)" | grep -v -E "(Apple Internal|Built-In.*=.*Yes)" | grep -E "(Pointing|Mouse|Receiver)" | wc -l)
 
     # Check for USB HID interfaces that could be mice (excluding built-in devices)
     local usb_hid_mice
     usb_hid_mice=$(ioreg -p IOUSB 2>/dev/null | grep -A 20 "AppleUserUSBHostHIDDevice" | grep -E "(Product|Manufacturer)" | grep -iE "(mouse|receiver|logitech|razer|corsair|steelseries)" | wc -l)
 
-    # Check for non-trackpad/touchpad HID event services
-    local external_pointing
-    external_pointing=$(ioreg 2>/dev/null | grep -A 5 -B 5 "AppleUserHIDEventDriver" | grep -v -iE "(trackpad|touchpad|keyboard)" | grep -E "AppleUserHIDEventDriver" | wc -l)
-
-    # Count USB HID devices that aren't built-in
+    # Check specifically for external USB HID pointing devices (not built-in trackpads)
     local usb_hid_count
     usb_hid_count=$(ioreg 2>/dev/null | grep -c "AppleUserUSBHostHIDDevice")
 
-    # If any method detects potential mice/receivers or we have USB HID devices, return true
-    if [[ $usb_mice -gt 0 ]] || [[ $bt_mice -gt 0 ]] || [[ $hid_mice -gt 0 ]] || [[ $usb_hid_mice -gt 0 ]] || [[ $external_pointing -gt 0 ]] || [[ $usb_hid_count -gt 0 ]]; then
+    # Only return true for definitive external mouse indicators
+    if [[ $usb_mice -gt 0 ]] || [[ $bt_mice -gt 0 ]] || [[ $usb_hid_mice -gt 0 ]] || [[ $usb_hid_count -gt 0 ]]; then
         return 0  # Mouse detected
     else
         return 1  # No mouse detected
@@ -109,20 +105,15 @@ debug_detection() {
     bt_mice=$(system_profiler SPBluetoothDataType 2>/dev/null | grep -E "(Mouse|Trackball)" | grep -v "Not Connected" | wc -l)
     echo "Bluetooth mice found: $bt_mice"
 
-    # Check HID devices
+    # Check HID devices (excluding built-in)
     local hid_mice
-    hid_mice=$(ioreg -c IOHIDDevice 2>/dev/null | grep -E "(Pointing|Mouse|Receiver)" | wc -l)
-    echo "HID mice/pointing devices found: $hid_mice"
+    hid_mice=$(ioreg -c IOHIDDevice 2>/dev/null | grep -A 10 -B 5 -E "(Pointing|Mouse|Receiver)" | grep -v -E "(Apple Internal|Built-In.*=.*Yes)" | grep -E "(Pointing|Mouse|Receiver)" | wc -l)
+    echo "External HID mice/pointing devices found: $hid_mice"
 
     # Check USB HID interfaces
     local usb_hid_mice
     usb_hid_mice=$(ioreg -p IOUSB 2>/dev/null | grep -A 20 "AppleUserUSBHostHIDDevice" | grep -E "(Product|Manufacturer)" | grep -iE "(mouse|receiver|logitech|razer|corsair|steelseries)" | wc -l)
     echo "USB HID mice found: $usb_hid_mice"
-
-    # Check external pointing devices
-    local external_pointing
-    external_pointing=$(ioreg 2>/dev/null | grep -A 5 -B 5 "AppleUserHIDEventDriver" | grep -v -iE "(trackpad|touchpad|keyboard)" | grep -E "AppleUserHIDEventDriver" | wc -l)
-    echo "External pointing devices found: $external_pointing"
 
     # Count USB HID devices
     local usb_hid_count
@@ -134,8 +125,8 @@ debug_detection() {
     system_profiler SPUSBDataType 2>/dev/null | grep -iE "(receiver|dongle|mouse|keyboard)" | sed 's/^/  /'
 
     echo
-    echo "📋 USB HID Device Details:"
-    ioreg 2>/dev/null | grep -A 2 -B 2 "AppleUserUSBHostHIDDevice" | grep -E "(Product|Manufacturer|class)" | head -10 | sed 's/^/  /'
+    echo "📋 HID Device Products:"
+    ioreg -c IOHIDDevice -r 2>/dev/null | grep -E "\"Product\"" | sed 's/^/  /'
 }
 
 # Function to apply appropriate settings
