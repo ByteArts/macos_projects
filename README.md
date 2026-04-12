@@ -12,11 +12,15 @@ A workspace for developing macOS shell scripts, automation tools, and system adm
 ## Available Scripts
 
 ### Auto Scroll Direction Manager
-Automatically adjusts macOS "natural scrolling" setting based on connected input devices:
-- **Disables** natural scrolling when an external mouse is detected
-- **Enables** natural scrolling when only trackpad is present
+Automatically adjusts macOS "natural scrolling" setting based on trackpad status:
+- **Enables** natural scrolling ONLY when the built-in trackpad is active
+- **Disables** natural scrolling by default (when trackpad is disabled or suppressed)
 
-**Enhanced Detection**: Detects USB mice, Bluetooth mice, wireless receivers, dongles, and generic HID pointing devices.
+**Smart Detection**:
+- Monitors built-in trackpad status using macOS IORegistry
+- Detects external mice (Bluetooth and USB)
+- Respects the "ignore built-in trackpad when mouse is present" accessibility setting
+- Only enables natural scrolling when the trackpad is actually active and not suppressed
 
 ```bash
 # Check current status

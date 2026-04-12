@@ -1,9 +1,9 @@
 #!/usr/bin/env zsh
 
 # Auto Scroll Direction Manager
-# Description: Automatically adjusts natural scrolling based on connected input devices
-#              - Turns OFF natural scrolling when a mouse is detected
-#              - Turns ON natural scrolling when only trackpad is present
+# Description: Automatically adjusts natural scrolling based on trackpad status
+#              - Turns ON natural scrolling only when built-in trackpad is enabled
+#              - Turns OFF natural scrolling by default (when mouse connected or trackpad disabled)
 # Usage: ./auto_scroll_direction.sh [--check|--apply|--monitor]
 # Author: macOS Scripts Workspace
 
@@ -18,32 +18,56 @@ check_macos
 
 # Function to check if external mouse is connected
 has_external_mouse() {
-    # Check USB devices for mice or generic receivers that could be mice
-    local usb_mice
-    usb_mice=$(system_profiler SPUSBDataType 2>/dev/null | grep -iE "(mouse|receiver|dongle|wireless)" | wc -l)
+    # Check for Bluetooth mice (like Magic Mouse, etc.)
+    local bt_mouse
+    bt_mouse=$(ioreg -l | grep -i "magic mouse\|bluetooth.*mouse" | wc -l)
 
-    # Check Bluetooth devices for mice
-    local bt_mice
-    bt_mice=$(system_profiler SPBluetoothDataType 2>/dev/null | grep -E "(Mouse|Trackball)" | grep -v "Not Connected" | wc -l)
+    # Check for USB mice
+    local usb_mouse
+    usb_mouse=$(system_profiler SPUSBDataType 2>/dev/null | grep -i "mouse" | wc -l)
 
-    # Check for HID devices with mouse-like properties but only external ones
-    local hid_mice
-    hid_mice=$(ioreg -c IOHIDDevice 2>/dev/null | grep -A 10 -B 5 -E "(Pointing|Mouse|Receiver)" | grep -v -E "(Apple Internal|Built-In.*=.*Yes)" | grep -E "(Pointing|Mouse|Receiver)" | wc -l)
-
-    # Check for USB HID interfaces that could be mice (excluding built-in devices)
-    local usb_hid_mice
-    usb_hid_mice=$(ioreg -p IOUSB 2>/dev/null | grep -A 20 "AppleUserUSBHostHIDDevice" | grep -E "(Product|Manufacturer)" | grep -iE "(mouse|receiver|logitech|razer|corsair|steelseries)" | wc -l)
-
-    # Check specifically for external USB HID pointing devices (not built-in trackpads)
-    local usb_hid_count
-    usb_hid_count=$(ioreg 2>/dev/null | grep -c "AppleUserUSBHostHIDDevice")
-
-    # Only return true for definitive external mouse indicators
-    if [[ $usb_mice -gt 0 ]] || [[ $bt_mice -gt 0 ]] || [[ $usb_hid_mice -gt 0 ]] || [[ $usb_hid_count -gt 0 ]]; then
-        return 0  # Mouse detected
+    if [[ $bt_mouse -gt 0 ]] || [[ $usb_mouse -gt 0 ]]; then
+        return 0  # External mouse detected
     else
-        return 1  # No mouse detected
+        return 1  # No external mouse
     fi
+}
+
+# Function to check if trackpad is being ignored due to mouse presence
+is_trackpad_suppressed() {
+    # Check the USBMouseStopsTrackpad setting
+    local mouse_stops_trackpad
+    mouse_stops_trackpad=$(ioreg -c IOHIDSystem -r 2>/dev/null | grep "USBMouseStopsTrackpad" | sed 's/.*USBMouseStopsTrackpad[^0-9]*\([0-9]\).*/\1/')
+
+    # If USBMouseStopsTrackpad=1 and external mouse is present, trackpad is suppressed
+    if [[ "$mouse_stops_trackpad" == "1" ]] && has_external_mouse; then
+        return 0  # Trackpad is suppressed
+    else
+        return 1  # Trackpad is not suppressed
+    fi
+}
+
+# Function to check if built-in trackpad is enabled
+is_trackpad_enabled() {
+    # Check if built-in trackpad exists
+    local trackpad_exists
+    trackpad_exists=$(ioreg -c AppleMultitouchDevice 2>/dev/null | grep -E "\"MT Built-In\" = Yes" | wc -l)
+
+    # Also check for the Apple Internal Keyboard/Trackpad device
+    local internal_trackpad
+    internal_trackpad=$(ioreg -c AppleMultitouchDevice 2>/dev/null | grep -i "Apple Internal.*Trackpad" | wc -l)
+
+    # If trackpad doesn't exist, it's not enabled
+    if [[ $trackpad_exists -eq 0 ]] && [[ $internal_trackpad -eq 0 ]]; then
+        return 1  # No trackpad found
+    fi
+
+    # If trackpad exists but is being suppressed by external mouse, it's not enabled
+    if is_trackpad_suppressed; then
+        return 1  # Trackpad is suppressed
+    fi
+
+    return 0  # Trackpad is enabled and active
 }
 
 # Function to get current natural scrolling setting
@@ -56,10 +80,10 @@ set_natural_scrolling() {
     local enable="$1"
     if [[ "$enable" == "true" ]]; then
         defaults write -g com.apple.swipescrolldirection -bool true
-        log_success "Natural scrolling enabled (trackpad-style)"
+        log_success "Natural scrolling ON (trackpad-style)"
     else
         defaults write -g com.apple.swipescrolldirection -bool false
-        log_success "Natural scrolling disabled (traditional mouse-style)"
+        log_success "Natural scrolling OFF (traditional mouse-style)"
     fi
 }
 
@@ -73,10 +97,16 @@ check_status() {
 
     if has_external_mouse; then
         echo "🖱️  External mouse: DETECTED"
-        log_info "Recommended setting: Natural scrolling OFF"
     else
         echo "🖱️  External mouse: NOT DETECTED"
+    fi
+
+    if is_trackpad_enabled; then
+        echo "📱 Built-in trackpad: ENABLED (active)"
         log_info "Recommended setting: Natural scrolling ON"
+    else
+        echo "📱 Built-in trackpad: DISABLED (suppressed or not present)"
+        log_info "Recommended setting: Natural scrolling OFF"
     fi
 
     echo
@@ -84,49 +114,74 @@ check_status() {
     echo "==================="
 
     if [[ "$current_setting" == "1" ]]; then
-        echo "📱 Natural scrolling: ENABLED (trackpad-style)"
+        echo "📱 Natural scrolling: ON (trackpad-style)"
     else
-        echo "🖱️  Natural scrolling: DISABLED (traditional mouse-style)"
+        echo "🖱️  Natural scrolling: OFF (traditional mouse-style)"
     fi
 }
 
 # Function to show debug information about device detection
 debug_detection() {
-    echo "🔍 Debug: Device Detection Details"
-    echo "=================================="
+    echo "🔍 Debug: Trackpad Detection Details"
+    echo "===================================="
 
-    # Check USB devices for mice or generic receivers
-    local usb_mice
-    usb_mice=$(system_profiler SPUSBDataType 2>/dev/null | grep -iE "(mouse|receiver|dongle|wireless)" | wc -l)
-    echo "USB mice/receivers found: $usb_mice"
+    # Check for built-in trackpad
+    local trackpad_exists
+    trackpad_exists=$(ioreg -c AppleMultitouchDevice 2>/dev/null | grep -E "\"MT Built-In\" = Yes" | wc -l)
+    echo "MT Built-In trackpad devices found: $trackpad_exists"
 
-    # Check Bluetooth devices
-    local bt_mice
-    bt_mice=$(system_profiler SPBluetoothDataType 2>/dev/null | grep -E "(Mouse|Trackball)" | grep -v "Not Connected" | wc -l)
-    echo "Bluetooth mice found: $bt_mice"
-
-    # Check HID devices (excluding built-in)
-    local hid_mice
-    hid_mice=$(ioreg -c IOHIDDevice 2>/dev/null | grep -A 10 -B 5 -E "(Pointing|Mouse|Receiver)" | grep -v -E "(Apple Internal|Built-In.*=.*Yes)" | grep -E "(Pointing|Mouse|Receiver)" | wc -l)
-    echo "External HID mice/pointing devices found: $hid_mice"
-
-    # Check USB HID interfaces
-    local usb_hid_mice
-    usb_hid_mice=$(ioreg -p IOUSB 2>/dev/null | grep -A 20 "AppleUserUSBHostHIDDevice" | grep -E "(Product|Manufacturer)" | grep -iE "(mouse|receiver|logitech|razer|corsair|steelseries)" | wc -l)
-    echo "USB HID mice found: $usb_hid_mice"
-
-    # Count USB HID devices
-    local usb_hid_count
-    usb_hid_count=$(ioreg 2>/dev/null | grep -c "AppleUserUSBHostHIDDevice")
-    echo "Total USB HID devices: $usb_hid_count"
+    # Check for Apple Internal Keyboard/Trackpad
+    local internal_trackpad
+    internal_trackpad=$(ioreg -c AppleMultitouchDevice 2>/dev/null | grep -i "Apple Internal.*Trackpad" | wc -l)
+    echo "Apple Internal Trackpad devices found: $internal_trackpad"
 
     echo
-    echo "📋 Detected USB Input Devices:"
-    system_profiler SPUSBDataType 2>/dev/null | grep -iE "(receiver|dongle|mouse|keyboard)" | sed 's/^/  /'
+    echo "🖱️  External Mouse Detection"
+    echo "============================"
+
+    # Check for Bluetooth mice
+    local bt_mouse
+    bt_mouse=$(ioreg -l | grep -i "magic mouse\|bluetooth.*mouse" | wc -l)
+    echo "Bluetooth mice found: $bt_mouse"
+
+    # Check for USB mice
+    local usb_mouse
+    usb_mouse=$(system_profiler SPUSBDataType 2>/dev/null | grep -i "mouse" | wc -l)
+    echo "USB mice found: $usb_mouse"
+
+    if has_external_mouse; then
+        echo "✅ External mouse: DETECTED"
+    else
+        echo "❌ External mouse: NOT DETECTED"
+    fi
 
     echo
-    echo "📋 HID Device Products:"
-    ioreg -c IOHIDDevice -r 2>/dev/null | grep -E "\"Product\"" | sed 's/^/  /'
+    echo "⚙️  Trackpad Suppression Settings"
+    echo "================================="
+
+    # Check USBMouseStopsTrackpad setting
+    local mouse_stops_trackpad
+    mouse_stops_trackpad=$(ioreg -c IOHIDSystem -r 2>/dev/null | grep "USBMouseStopsTrackpad" | sed 's/.*USBMouseStopsTrackpad[^0-9]*\([0-9]\).*/\1/')
+    echo "USBMouseStopsTrackpad setting: ${mouse_stops_trackpad:-not found}"
+
+    if is_trackpad_suppressed; then
+        echo "🚫 Trackpad is SUPPRESSED (ignored by system)"
+    else
+        echo "✅ Trackpad is NOT suppressed"
+    fi
+
+    echo
+    echo "📊 Final Trackpad Status"
+    echo "========================"
+    if is_trackpad_enabled; then
+        echo "✅ Trackpad status: ENABLED (active and responding)"
+    else
+        echo "❌ Trackpad status: DISABLED (not active)"
+    fi
+
+    echo
+    echo "📋 Multitouch Devices:"
+    ioreg -c AppleMultitouchDevice -r 2>/dev/null | grep -E "(\"Product\"|MT Built-In)" | sed 's/^/  /'
 }
 
 # Function to apply appropriate settings
@@ -134,23 +189,25 @@ apply_settings() {
     local current_setting
     current_setting=$(get_natural_scrolling)
 
-    if has_external_mouse; then
-        log_info "External mouse detected"
-        if [[ "$current_setting" == "1" ]]; then
-            log_info "Disabling natural scrolling for mouse use..."
-            set_natural_scrolling false
-            log_success "✅ Natural scrolling disabled"
+    # Only enable natural scrolling if built-in trackpad is enabled
+    # Default to disabled in all other cases
+    if is_trackpad_enabled; then
+        log_info "Built-in trackpad is enabled"
+        if [[ "$current_setting" != "1" ]]; then
+            log_info "Turning natural scrolling ON for trackpad use..."
+            set_natural_scrolling true
+            log_success "✅ Natural scrolling ON"
         else
-            log_info "Natural scrolling already disabled"
+            log_info "Natural scrolling already ON"
         fi
     else
-        log_info "Only trackpad detected"
-        if [[ "$current_setting" != "1" ]]; then
-            log_info "Enabling natural scrolling for trackpad use..."
-            set_natural_scrolling true
-            log_success "✅ Natural scrolling enabled"
+        log_info "Built-in trackpad is disabled (mouse connected or trackpad off)"
+        if [[ "$current_setting" == "1" ]]; then
+            log_info "Turning natural scrolling OFF..."
+            set_natural_scrolling false
+            log_success "✅ Natural scrolling turned OFF"
         else
-            log_info "Natural scrolling already enabled"
+            log_info "Natural scrolling already OFF"
         fi
     fi
 }
@@ -160,22 +217,22 @@ monitor_devices() {
     log_info "Starting device monitor mode..."
     log_info "Press Ctrl+C to stop monitoring"
 
-    local last_mouse_state=""
+    local last_trackpad_state=""
 
     while true; do
-        local current_mouse_state
-        if has_external_mouse; then
-            current_mouse_state="mouse_present"
+        local current_trackpad_state
+        if is_trackpad_enabled; then
+            current_trackpad_state="trackpad_enabled"
         else
-            current_mouse_state="mouse_absent"
+            current_trackpad_state="trackpad_disabled"
         fi
 
         # Only apply changes when state changes
-        if [[ "$current_mouse_state" != "$last_mouse_state" ]]; then
+        if [[ "$current_trackpad_state" != "$last_trackpad_state" ]]; then
             echo
-            log_info "Input device state changed: $current_mouse_state"
+            log_info "Trackpad state changed: $current_trackpad_state"
             apply_settings
-            last_mouse_state="$current_mouse_state"
+            last_trackpad_state="$current_trackpad_state"
         fi
 
         sleep 5  # Check every 5 seconds
@@ -187,7 +244,11 @@ show_usage() {
     echo "Usage: $0 [OPTION]"
     echo
     echo "Auto Scroll Direction Manager"
-    echo "Automatically adjusts macOS natural scrolling based on connected devices"
+    echo "Automatically adjusts macOS natural scrolling based on trackpad status"
+    echo
+    echo "Behavior:"
+    echo "  - Turns natural scrolling ON when built-in trackpad is active"
+    echo "  - Turns natural scrolling OFF by default (when mouse connected or trackpad disabled)"
     echo
     echo "Options:"
     echo "  --check     Check current device status and settings"
@@ -229,8 +290,30 @@ main() {
             # Default behavior: check and apply
             check_status
             echo
-            if confirm "Apply recommended scroll direction setting?"; then
-                apply_settings
+
+            # Check if recommended setting is already applied
+            local current_setting
+            current_setting=$(get_natural_scrolling)
+            local settings_match=false
+
+            if is_trackpad_enabled; then
+                # Trackpad enabled: recommended setting is ON (1)
+                if [[ "$current_setting" == "1" ]]; then
+                    settings_match=true
+                fi
+            else
+                # Trackpad disabled: recommended setting is OFF (not 1)
+                if [[ "$current_setting" != "1" ]]; then
+                    settings_match=true
+                fi
+            fi
+
+            if [[ "$settings_match" == "true" ]]; then
+                log_success "✅ Recommended setting is already applied"
+            else
+                if confirm "Apply recommended scroll direction setting?"; then
+                    apply_settings
+                fi
             fi
             ;;
         *)
