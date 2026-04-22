@@ -18,9 +18,12 @@ check_macos
 
 # Function to check if external mouse is connected
 has_external_mouse() {
-    # Check for Bluetooth mice (like Magic Mouse, etc.)
+    # Check for connected Bluetooth mice by parsing only the "Connected:" section
+    # of SPBluetoothDataType, avoiding false positives from paired-but-not-connected devices
     local bt_mouse
-    bt_mouse=$(ioreg -l | grep -i "magic mouse\|bluetooth.*mouse" | wc -l)
+    bt_mouse=$(system_profiler SPBluetoothDataType 2>/dev/null | \
+        awk '/^      Connected:/{found=1} /^      Not Connected:/{found=0} found && /Minor Type: Mouse/' | \
+        wc -l)
 
     # Check for USB mice
     local usb_mouse
@@ -139,9 +142,11 @@ debug_detection() {
     echo "🖱️  External Mouse Detection"
     echo "============================"
 
-    # Check for Bluetooth mice
+    # Check for connected Bluetooth mice (Connected: section of SPBluetoothDataType only)
     local bt_mouse
-    bt_mouse=$(ioreg -l | grep -i "magic mouse\|bluetooth.*mouse" | wc -l)
+    bt_mouse=$(system_profiler SPBluetoothDataType 2>/dev/null | \
+        awk '/^      Connected:/{found=1} /^      Not Connected:/{found=0} found && /Minor Type: Mouse/' | \
+        wc -l)
     echo "Bluetooth mice found: $bt_mouse"
 
     # Check for USB mice
